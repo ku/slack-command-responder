@@ -29,6 +29,17 @@ func (r *SlackCommandResponder) Start() error {
 
 }
 
+type rerunActionState struct {
+	Values struct {
+		ExecutedScriptBlock struct {
+			RerunBlockInput struct {
+				Type  string `json:"type"`
+				Value string `json:"value"`
+			} `json:"rerun-block-input"`
+		} `json:"executed-script-block"`
+	} `json:"values"`
+}
+
 func (r *SlackCommandResponder) interactivityHandler(w http.ResponseWriter, req *http.Request) (interface{}, error) {
 	body, err := io.ReadAll(req.Body)
 	if err != nil {
@@ -51,18 +62,19 @@ func (r *SlackCommandResponder) interactivityHandler(w http.ResponseWriter, req 
 
 	ctx := context.Background()
 	for _, ba := range icb.ActionCallback.BlockActions {
-		script := ba.Value
+		var script string
+		if ba.ActionID == "rerun-button-action" {
+			var st rerunActionState
+			if err := json.Unmarshal(icb.RawState, &st); err != nil {
+				log.Printf("failed to unmarshal state: %s", err.Error())
+				continue
+			}
+			script = st.Values.ExecutedScriptBlock.RerunBlockInput.Value
+		} else {
+			script = ba.Value
+		}
 
-		tb := slack.NewTextBlockObject("mrkdwn", fmt.Sprintf("```%s```", script), false, false)
-		cmdBlock := slack.NewSectionBlock(tb, nil, nil)
-
-		//		ctxBlock := slack.NewContextBlock("cb", tb)
-
-		res, err := r.conf.Executor(ctx, script)
-
-		blocks := []slack.Block{}
-		blocks = append(blocks, cmdBlock)
-		blocks = append(blocks, res...)
+		blocks, err := r.conf.Executor(ctx, script)
 
 		opts := append([]slack.MsgOption{
 			slack.MsgOptionResponseURL(icb.ResponseURL, "in_channel"),
@@ -72,6 +84,7 @@ func (r *SlackCommandResponder) interactivityHandler(w http.ResponseWriter, req 
 		if err := r.respondToResponseURL(ctx, ba.InitialChannel, opts, err); err != nil {
 			log.Printf("failed to respond to response url: %w", err.Error())
 		}
+
 		break
 	}
 
